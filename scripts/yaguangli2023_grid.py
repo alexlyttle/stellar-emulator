@@ -3,8 +3,8 @@ import numpy as np
 import pandas as pd
 
 PATH = "/mnt/data-storage/yaguangli2023/stellar-models/grid_models_surface_effect_uncorrected"
-FILENAME = "grid_clean.h5"
-CLEAN = True
+FILENAME = "grid.h5"
+# CLEAN = True
 TRACK_COLS = [
     "star_mass",
     "Yinit",
@@ -27,6 +27,7 @@ STAR_COLS = [
 MODE_COLS = [
     'mode_freq_o'
 ]
+# These look the same as the astropy constants
 CONST = {
     "msun": 1.9884098706980504e33,
     "rsun": 6.957e10,
@@ -63,17 +64,17 @@ def tracks_to_dataframe(tracks):
         df[key] = np.concatenate(tracks[key])
     return add_index_cols(df)
 
-def clean_dataframe(df):
-    """Remove pre main sequence points."""
-    print("Removing pre-main sequence points")
-    df["f_nuc"] = 10**df.log_Lnuc / df.luminosity
-    df["delta_X"] = df.Xinit - df.center_h1
-    idxs = []
-    for _, group in df.groupby("track"):
-        hburn = (group["f_nuc"] > 0.999) & (group["delta_X"] > 0.0015)
-        mask = group.index < hburn.idxmax()
-        idxs.append(group.index[mask].to_numpy())
-    return df.drop(index=np.concatenate(idxs))
+# def clean_dataframe(df):
+#     """Remove pre main sequence points."""
+#     print("Removing pre-main sequence points")
+#     df["f_nuc"] = 10**df.log_Lnuc / df.luminosity
+#     df["delta_X"] = df.Xinit - df.center_h1
+#     idxs = []
+#     for _, group in df.groupby("track"):
+#         hburn = (group["f_nuc"] > 0.999) & (group["delta_X"] > 0.0015)
+#         mask = group.index < hburn.idxmax()
+#         idxs.append(group.index[mask].to_numpy())
+#     return df.drop(index=np.concatenate(idxs))
 
 def append_hdf(filename, df, group, index_cols, data_cols):
     df.drop_duplicates(index_cols).set_index(index_cols)[data_cols].to_hdf(filename, group, append=True, format="table")
@@ -81,8 +82,8 @@ def append_hdf(filename, df, group, index_cols, data_cols):
 def update(input_filename):
     print("Loading", input_filename)
     df = tracks_to_dataframe(load_tracks(input_filename))
-    if CLEAN:
-        df = clean_dataframe(df)
+#     if CLEAN:
+#         df = clean_dataframe(df)
     
     print("Appending tracks to", output_filename)
     append_hdf(output_filename, df, "tracks", "track", TRACK_COLS)
