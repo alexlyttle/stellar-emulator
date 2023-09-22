@@ -1,7 +1,7 @@
 import jax.numpy as jnp
 from jax import lax, random
 from numpyro.distributions import constraints, Distribution
-from numpyro.distributions.util import promote_shapes
+from numpyro.distributions.util import promote_shapes, validate_sample
 
 
 class Salpeter(Distribution):
@@ -65,3 +65,48 @@ class Salpeter(Distribution):
         minval = jnp.finfo(jnp.result_type(float)).tiny
         u = random.uniform(key, shape, minval=minval)
         return self.icdf(u)
+
+
+class LogSalpeter(Distribution):
+    reparametrized_params = ["low", "high", "rate"]
+    arg_constraints = {
+        "rate": constraints.positive,
+        "low": constraints.real,
+        "high": constraints.real,
+    }
+
+    def __init__(self, low, high, rate=2.35, *, validate_args=None):
+        self.low, self.high, self.rate = promote_shapes(low, high, rate)
+        self._plow = jnp.exp(- self.rate * self.low)
+        self._phigh = jnp.exp(- self.rate * self.high)
+        batch_shape = lax.broadcast_shapes(jnp.shape(low), jnp.shape(high), jnp.shape(rate))
+        super(LogSalpeter, self).__init__(
+            batch_shape=batch_shape, validate_args=validate_args
+        )
+        self._support = constraints.interval(self.low, self.high)
+
+    @constraints.dependent_property
+    def support(self):
+        return self._support
+    
+    def sample(self, key, sample_shape=()):
+        shape = sample_shape + self.batch_shape
+        minval = jnp.finfo(jnp.result_type(float)).tiny
+        u = random.uniform(key, shape, minval=minval)
+        return self.icdf(u)
+
+    @validate_sample
+    def log_prob(self, value):
+        return jnp.log(self.rate) - self.rate * value - jnp.log(self._plow - self._phigh)
+
+    def cdf(self, value):
+        return (
+            (self._plow - jnp.exp(- self.rate * value)) 
+            / (self._plow - self._phigh)
+        )
+
+    def icdf(self, q):
+        return - jnp.log(
+            self._plow * (1 - q) 
+            + self._phigh
+        ) / self.rate
