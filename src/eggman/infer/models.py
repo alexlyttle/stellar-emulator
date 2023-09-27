@@ -90,63 +90,74 @@ class Star(Model):
         values = np.reshape(bc_grid.df[self.bands].to_numpy(), shape + [len(self.bands),])
         return RegularGridInterpolator(points, values)
 
+    def prior(self, const):
+        x = numpyro.sample("x", dist.Uniform(0.0, 0.999))
+        ln_mass = numpyro.sample("ln_mass", LogSalpeter(jnp.log(0.7), jnp.log(2.3), rate=2.35))
+        y = numpyro.sample("Y", dist.Uniform(0.22, 0.32))
+        mh = numpyro.sample("M_H", dist.TruncatedNormal(const["M_H"]["mu"], const["M_H"]["sigma"], low=-0.9, high=0.5))
+        a_mlt = numpyro.sample("a_MLT", dist.Uniform(1.3, 2.7))
+        plx = numpyro.sample(
+            "plx", 
+            dist.LogNormal(*lognorm_from_norm(const["plx"]["mu"], const["plx"]["sigma"]))
+        )
+        av = numpyro.sample(
+            "Av", 
+            dist.LogNormal(*lognorm_from_norm(const["Av"]["mu"], const["Av"]["sigma"]))
+        )
+        return x, ln_mass, y, mh, a_mlt, plx, av
+
+    def _emulator_inputs(self, x, ln_mass, y, mh, a_mlt):
+        eep = numpyro.deterministic("EEP", self.evol_phase(x))
+        mass = numpyro.deterministic("mass", jnp.exp(ln_mass))
+
+        z = numpyro.deterministic("Z", self.heavy_elements(y, mh))
+        log_z = jnp.log10(z)
+        return jnp.stack([eep, mass, y, log_z, a_mlt], axis=-1)
+
+    def emulate_star(self, x, ln_mass, y, mh, a_mlt):
+
+        inputs = self._emulator_inputs(x, ln_mass, y, mh, a_mlt)
+        yy = self.emulator(inputs)
+
+        log_lum = numpyro.deterministic("log_lum", self.log_luminosity(yy[1], yy[2]))
+        log_rad = numpyro.deterministic("log_rad", yy[2])
+        numpyro.deterministic("rad", 10**log_rad)
+
+        logg = numpyro.deterministic("logg", self.log_gravity(ln_mass/ln10, log_rad))
+        lum = numpyro.deterministic("lum", 10**log_lum)
+        teff = numpyro.deterministic("Teff", 10**yy[1])
+        dnu = numpyro.deterministic("Dnu", 10**yy[3])
+        
+        log_age = numpyro.deterministic("log_age", yy[0])
+        numpyro.deterministic("age", 10**log_age)
+
+        return teff, logg, log_lum
+    
     def __call__(self, const, obs=None):
-            if obs is None:
-                obs = {}
+        if obs is None:
+            obs = {}
 
-            x = numpyro.sample("x", dist.Uniform(0.0, 0.999))
-            ln_mass = numpyro.sample("ln_mass", LogSalpeter(jnp.log(0.7), jnp.log(2.3), rate=2.35))
-            y = numpyro.sample("Y", dist.Uniform(0.22, 0.32))
-            mh = numpyro.sample("M_H", dist.TruncatedNormal(const["M_H"]["sigma"], const["M_H"]["sigma"], low=-0.9, high=0.5))
-            a_mlt = numpyro.sample("a_MLT", dist.Uniform(1.3, 2.7))
-            plx = numpyro.sample(
-                "plx", 
-                dist.LogNormal(*lognorm_from_norm(const["plx"]["mu"], const["plx"]["sigma"]))
+        x, ln_mass, y, mh, a_mlt, plx, av = self.prior(const)
+        
+        teff, logg, log_lum = self.emulate_star(x, ln_mass, y, mh, a_mlt)
+
+        numpyro.deterministic("dist", 1/plx)
+
+        xx = jnp.stack([teff, logg, mh, av], axis=-1)
+    #     bc = numpyro.deterministic("bol_corr", bc_interp(xx).squeeze())
+        bc = self.bc_interp(xx).squeeze()
+
+        bol_mag = self.bolometric_magnitude(log_lum)
+        abs_mag = self.absolute_magnitude(bol_mag, bc)
+        mag = self.apparent_magnitude(abs_mag, plx)
+
+        for i, band in enumerate(self.bands):
+            numpyro.deterministic(f"{band}_abs", abs_mag[i])
+            mu = numpyro.deterministic(band, mag[i])
+            if band not in obs:
+                continue
+            numpyro.sample(
+                f"{band}_obs", 
+                dist.StudentT(5, mu, const[band]["sigma"]),
+                obs=obs[band],
             )
-            av = numpyro.sample(
-                "Av", 
-                dist.LogNormal(*lognorm_from_norm(const["Av"]["mu"], const["Av"]["sigma"]))
-            )
-
-            eep = numpyro.deterministic("EEP", self.evol_phase(x))
-            mass = numpyro.deterministic("mass", jnp.exp(ln_mass))
-
-            z = numpyro.deterministic("Z", self.heavy_elements(y, mh))
-            log_z = jnp.log10(z)
-
-            xx = jnp.stack([eep, mass, y, log_z, a_mlt], axis=-1)
-        #     yy = numpyro.deterministic("emulator", emulator(xx))
-            yy = self.emulator(xx)
-
-            log_lum = numpyro.deterministic("log_lum", self.log_luminosity(yy[1], yy[2]))
-            log_rad = numpyro.deterministic("log_rad", yy[2])
-            rad = numpyro.deterministic("rad", 10**log_rad)
-
-            logg = numpyro.deterministic("logg", self.log_gravity(ln_mass/ln10, log_rad))
-            lum = numpyro.deterministic("lum", 10**log_lum)
-            teff = numpyro.deterministic("Teff", 10**yy[1])
-            dnu = numpyro.deterministic("Dnu", 10**yy[3])
-
-            distance = numpyro.deterministic("dist", 1/plx)
-
-            xx = jnp.stack([teff, logg, mh, av], axis=-1)
-        #     bc = numpyro.deterministic("bol_corr", bc_interp(xx).squeeze())
-            bc = self.bc_interp(xx).squeeze()
-
-            bol_mag = self.bolometric_magnitude(log_lum)
-            abs_mag = self.absolute_magnitude(bol_mag, bc)
-            mag = self.apparent_magnitude(abs_mag, plx)
-
-            for i, band in enumerate(self.bands):
-                numpyro.deterministic(f"{band}_abs", abs_mag[i])
-                mu = numpyro.deterministic(band, mag[i])
-                if band not in obs:
-                    continue
-                numpyro.sample(
-                    f"{band}_obs", 
-                    dist.StudentT(5, mu, const[band]["sigma"]),
-                    obs=obs[band],
-                )
-
-            log_age = numpyro.deterministic("log_age", yy[0])
-            age = numpyro.deterministic("age", 10**log_age)
