@@ -35,6 +35,7 @@ class Star(Model):
     log_teff_sun = np.log10(5772)
     log_g_sun = 4.44
     bol_mag_sun = 4.75
+    dof = 5
 
     def __init__(self, bands=None):
         if bands is None:
@@ -92,18 +93,19 @@ class Star(Model):
 
     def prior(self, const):
         x = numpyro.sample("x", dist.Uniform(0.0, 0.999))
-        ln_mass = numpyro.sample("ln_mass", LogSalpeter(jnp.log(0.7), jnp.log(2.3), rate=2.35))
+        # ln_mass = numpyro.sample("ln_mass", LogSalpeter(jnp.log(0.7), jnp.log(2.3), rate=2.35))
+        # Good approximation of Chabrier IMF
+        ln_mass = numpyro.sample("ln_mass", dist.TruncatedNormal(-0.2, 0.7, low=jnp.log(0.7), high=jnp.log(2.3)))
         y = numpyro.sample("Y", dist.Uniform(0.22, 0.32))
         mh = numpyro.sample("M_H", dist.TruncatedNormal(const["M_H"]["mu"], const["M_H"]["sigma"], low=-0.9, high=0.5))
         a_mlt = numpyro.sample("a_MLT", dist.Uniform(1.3, 2.7))
-        plx = numpyro.sample(
-            "plx", 
-            dist.LogNormal(*lognorm_from_norm(const["plx"]["mu"], const["plx"]["sigma"]))
-        )
-        av = numpyro.sample(
-            "Av", 
-            dist.LogNormal(*lognorm_from_norm(const["Av"]["mu"], const["Av"]["sigma"]))
-        )
+        
+        plx_dist = dist.LogNormal(*lognorm_from_norm(const["plx"]["mu"], const["plx"]["sigma"]))
+        plx = numpyro.sample("plx", plx_dist)
+
+        av_dist = dist.LogNormal(*lognorm_from_norm(const["Av"]["mu"], const["Av"]["sigma"]))            
+        av = numpyro.sample("Av", av_dist)
+
         return x, ln_mass, y, mh, a_mlt, plx, av
 
     def _emulator_inputs(self, x, ln_mass, y, mh, a_mlt):
@@ -158,6 +160,6 @@ class Star(Model):
                 continue
             numpyro.sample(
                 f"{band}_obs", 
-                dist.StudentT(5, mu, const[band]["sigma"]),
+                dist.StudentT(self.dof, mu, const[band]["sigma"]),
                 obs=obs[band],
             )
