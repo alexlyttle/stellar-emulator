@@ -4,7 +4,7 @@ import pandas as pd
 from .defaults import *
 from .star import nuclear_luminosity_fraction, delta_hydrogen, log_surface_gravity
 
-def calculate_eep(grid, keys, alpha=0.2, weights=None, scale=None):
+def calculate_eep(grid, keys, alpha=0.2, weights=None, scale=None, boundaries=None):
     """Calculate the primary and secondary equivalent evolutionary phase for
     tracks in the grid. This groups the grid by track and assumes that each
     track is in chronological order.
@@ -24,17 +24,22 @@ def calculate_eep(grid, keys, alpha=0.2, weights=None, scale=None):
         scale (list of float):
             Scale factor for distance metric across each primary EEP. Defaults
             to 1.0 for each phase.
+        boundaries (list of str):
+            List of primary boundaries.
     Returns:
         primary (pandas.Series): Primary EEP (0 = ZAMS, 1 = IAMS, 2 = TAMS, 
             3 = MAXNB, 4 = END) and -1 means unnassigned phase.
-        secondary (pandas.Series): Not yet implemented.
+        secondary (pandas.Series): Scaled distance metric for each phase
     """
     if weights is None:
         weights = np.ones(len(keys))
     
     if scale is None:
         scale = 4 * [1]
-        
+
+    if boundaries is None:
+        boundaries = ["zams", "iams", "tams", "maxn", "end"]
+
     # Location of each primary EEP phase
     loc = [sum(scale[:i]) for i in range(len(scale))]
 
@@ -44,23 +49,27 @@ def calculate_eep(grid, keys, alpha=0.2, weights=None, scale=None):
     grid["f_nuc"] = nuclear_luminosity_fraction(grid)
     grid["log_g"] = log_surface_gravity(grid)
 
+    boundary_conditions = {}
     for _, group in grid.groupby("track"):
 
-        zams = ((group.f_nuc > 0.999) & (group.delta_X > 0.0015)).idxmax()
+        boundary_conditions["zams"] = ((group.f_nuc > 0.999) & (group.delta_X > 0.0015)).idxmax()
 
         iams = (group[XCEN] < 0.3).idxmax()
-        iams = group.index[-1] if iams == group.index[0] else iams
+        boundary_conditions["iams"] = group.index[-1] if iams == group.index[0] else iams
 
         tams = (group[XCEN] < 1e-12).idxmax()
         tams = group.index[-1] if tams == group.index[0] else tams
+        boundary_conditions["tams"] = tams
 
         end = (group.log_g < 2.2).idxmax()
         end = group.index[-1] if end == group.index[0] else end
+        boundary_conditions["end"] = end
 
         # Max nuclear burning
         maxn = group.loc[(group.index > tams) & (group.index <= end), "f_nuc"].idxmax()
+        boundary_conditions["maxn"] = maxn
 
-        bounds = [zams, iams, tams, maxn, end]
+        bounds = [boundary_conditions[b] for b in boundaries]
 
         phase = [
             group.index[
