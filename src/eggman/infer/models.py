@@ -39,10 +39,10 @@ class Star(Model):
 
     def __init__(self, bands=None):
         if bands is None:
-            bands = ["G", "BP", "RP", "K"]
+            bands = ["G", "BP", "RP"]
         self.bands = bands
         self.bc_interp = self._interp_bc_grid()
-        self._eep_funclist = self._get_eep_funclist()
+        # self._eep_funclist = self._get_eep_funclist()
         self.emulator = Emulator()
 
     def _get_eep_funclist(self):
@@ -92,7 +92,8 @@ class Star(Model):
         return RegularGridInterpolator(points, values)
 
     def prior(self, const):
-        x = numpyro.sample("x", dist.Uniform(0.0, 0.999))
+        # x = numpyro.sample("x", dist.Uniform(0.0, 0.999))
+        s = numpyro.sample("s", dist.Beta(2.0, 5.0))
         # ln_mass = numpyro.sample("ln_mass", LogSalpeter(jnp.log(0.7), jnp.log(2.3), rate=2.35))
         # Good approximation of Chabrier IMF
         ln_mass = numpyro.sample("ln_mass", dist.TruncatedNormal(-0.2, 0.7, low=jnp.log(0.7), high=jnp.log(2.3)))
@@ -106,32 +107,32 @@ class Star(Model):
         av_dist = dist.LogNormal(*lognorm_from_norm(const["Av"]["mu"], const["Av"]["sigma"]))            
         av = numpyro.sample("Av", av_dist)
 
-        return x, ln_mass, y, mh, a_mlt, plx, av
+        return s, ln_mass, mh, y, a_mlt, plx, av
 
-    def _emulator_inputs(self, x, ln_mass, y, mh, a_mlt):
-        eep = numpyro.deterministic("EEP", self.evol_phase(x))
+    def _emulator_inputs(self, s, ln_mass, mh, y, a_mlt):
+        # eep = numpyro.deterministic("EEP", self.evol_phase(x))
+
         mass = numpyro.deterministic("mass", jnp.exp(ln_mass))
-
         z = numpyro.deterministic("Z", self.heavy_elements(y, mh))
-        log_z = jnp.log10(z)
-        return jnp.stack([eep, mass, y, log_z, a_mlt], axis=-1)
+        # log_z = jnp.log10(z)
+        return jnp.stack([s, mass, mh, y, a_mlt], axis=-1)
 
-    def emulate_star(self, x, ln_mass, y, mh, a_mlt):
+    def emulate_star(self, s, ln_mass, mh, y, a_mlt):
 
-        inputs = self._emulator_inputs(x, ln_mass, y, mh, a_mlt)
-        yy = self.emulator(inputs)
+        inputs = self._emulator_inputs(s, ln_mass, mh, y, a_mlt)
+        outputs = self.emulator(inputs)
 
-        log_lum = numpyro.deterministic("log_lum", self.log_luminosity(yy[1], yy[2]))
-        log_rad = numpyro.deterministic("log_rad", yy[2])
+        log_lum = numpyro.deterministic("log_lum", self.log_luminosity(outputs[1], outputs[2]))
+        log_rad = numpyro.deterministic("log_rad", outputs[2])
         numpyro.deterministic("rad", 10**log_rad)
 
         logg = numpyro.deterministic("logg", self.log_gravity(ln_mass/ln10, log_rad))
         lum = numpyro.deterministic("lum", 10**log_lum)
-        teff = numpyro.deterministic("Teff", 10**yy[1])
-        dnu = numpyro.deterministic("Dnu", 10**yy[3])
+        teff = numpyro.deterministic("Teff", 10**outputs[1])
+        dnu = numpyro.deterministic("Dnu", 10**outputs[3])
         
-        log_age = numpyro.deterministic("log_age", yy[0])
-        numpyro.deterministic("age", 10**log_age)
+        log_age = numpyro.deterministic("log_age", outputs[0])
+        numpyro.deterministic("age", 10**(log_age-9))
 
         return teff, logg, log_lum
     
@@ -139,15 +140,14 @@ class Star(Model):
         if obs is None:
             obs = {}
 
-        x, ln_mass, y, mh, a_mlt, plx, av = self.prior(const)
+        s, ln_mass, mh, y, a_mlt, plx, av = self.prior(const)
         
-        teff, logg, log_lum = self.emulate_star(x, ln_mass, y, mh, a_mlt)
+        teff, logg, log_lum = self.emulate_star(s, ln_mass, mh, y, a_mlt)
 
         numpyro.deterministic("dist", 1/plx)
 
-        xx = jnp.stack([teff, logg, mh, av], axis=-1)
     #     bc = numpyro.deterministic("bol_corr", bc_interp(xx).squeeze())
-        bc = self.bc_interp(xx).squeeze()
+        bc = self.bc_interp(jnp.stack([teff, logg, mh, av], axis=-1)).squeeze()
 
         bol_mag = self.bolometric_magnitude(log_lum)
         abs_mag = self.absolute_magnitude(bol_mag, bc)
