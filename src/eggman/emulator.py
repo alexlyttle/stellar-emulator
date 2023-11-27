@@ -3,7 +3,7 @@ import numpy as np
 import jax.numpy as jnp
 from pytensor import tensor as pt
 from jax.nn import elu as elu_jax
-from jax.nn import reul as relu_jax
+from jax.nn import relu as relu_jax
 from tensorflow.keras.models import load_model
 
 from . import PACKAGEDIR
