@@ -4,6 +4,7 @@ import astropy.constants as const
 from .defaults import *
 
 Teff_sun = (const.L_sun / 4 / np.pi / const.sigma_sb / const.R_sun**2)**0.25   
+ZX_sun = 0.0181
 
 def luminosity(grid):
     return grid[RAD]**2 * (grid[TEFF] / Teff_sun)**4
@@ -21,3 +22,7 @@ def log_surface_gravity(grid):
     return np.log10(
         const.G.cgs * const.M_sun.cgs * grid[MASS] / const.R_sun.cgs**2 / grid[RAD]**2
     )
+
+def metallicity(grid):
+    x = initial_hydrogen(grid)
+    return np.log10(grid[ZINI]/x) - np.log10(ZX_sun)
